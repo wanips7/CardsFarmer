@@ -110,16 +110,16 @@ begin
 
     SetEnvironmentVariable(PChar('SteamAppId'), PChar(AppId));
 
+    if InitSteamApi then
+    begin
+      Print(Format('Idle... App id: %s', [AppId]));
+
+      ProcessMessages;
+    end;
+
   except
     on E: Exception do
       Writeln('Error: ', E.Message);
-  end;
-
-  if InitSteamApi then
-  begin
-    Print(Format('Idle... App id: %s', [AppId]));
-
-    ProcessMessages;
   end;
 
   if IsTest then

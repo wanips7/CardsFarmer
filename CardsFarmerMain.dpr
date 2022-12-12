@@ -281,10 +281,10 @@ begin
   RegisterSyntaxRules;
 
   try
-    InitSteamApi;
 
     if Clp.Parse then
     begin
+      InitSteamApi;
       ExecCommands;
 
     end
