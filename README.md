@@ -1,9 +1,17 @@
 # CardsFarmer
-A program for farm cards of Steam games.
+A program for farm Steam cards.
+
+```
+Parameters:
+-l -login         Set login
+-p -pass          Set password
+-fs               Farm separately
+-ft               Farm together
+```
 
 <details>
 <summary>Screens</summary>
 
-![cf](https://user-images.githubusercontent.com/43500333/207080977-ffd2c617-11e1-4fd1-b359-fde40ee7cce8.jpg)
+![screen](https://github.com/wanips7/CardsFarmer/assets/43500333/0f65b24a-1efa-4a30-aaec-539edb122cf5)
 
 </details>
