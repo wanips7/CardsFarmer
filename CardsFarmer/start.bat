@@ -1,0 +1,1 @@
+start "CardsFarmer" "%~dp0CardsFarmerMain.exe" -login your_login -pass your_password -ft
