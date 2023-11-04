@@ -2,7 +2,7 @@
 
   A program for farm Steam cards.
 
-  Version 0.7
+  Version 0.8
 
   https://github.com/wanips7/CardsFarmer
 
@@ -18,7 +18,6 @@
 program CardsFarmerMain;
 
 {$APPTYPE CONSOLE}
-
 {$R *.res}
 
 uses
@@ -33,7 +32,7 @@ uses
   uClp in '..\clp\uClp.pas'; { https://github.com/wanips7/clp }
 
 const
-  APP_VERSION = '0.7';
+  APP_VERSION = '0.8';
   APP_TITLE = 'Cards Farmer ' + APP_VERSION;
   COOKIES_FOLDER = 'Cookies\';
 
@@ -68,7 +67,12 @@ begin
   raise Exception.Create(Value);
 end;
 
-procedure LoginEventHandler(const Nickname: string);
+procedure LoginEventHandler(const Login: string);
+begin
+  PrintF('Trying to log in using login "%s"...', [Login]);
+end;
+
+procedure LoggedEventHandler(const Nickname: string);
 begin
   PrintF('Logged as: %s', [Nickname]);
 end;
@@ -112,12 +116,12 @@ begin
   Print(Text);
 end;
 
-procedure StartEventHandler(const FarmMode: TFarmMode);
+procedure StartFarmingEventHandler(const FarmMode: TFarmMode);
 begin
   Print('Start farming.');
 end;
 
-procedure FinishEventHandler;
+procedure FinishFarmingEventHandler;
 begin
   Print('Done.');
 end;
@@ -207,9 +211,10 @@ begin
   Clp := TCommandLineParser.Create;
 
   CardsFarmer := TCardsFarmer.Create(AppDir);
-  CardsFarmer.OnStart := StartEventHandler;
-  CardsFarmer.OnFinish := FinishEventHandler;
+  CardsFarmer.OnStart := StartFarmingEventHandler;
+  CardsFarmer.OnFinish := FinishFarmingEventHandler;
   CardsFarmer.OnLogin := LoginEventHandler;
+  CardsFarmer.OnLogged := LoggedEventHandler;
   CardsFarmer.OnLoadBadgePage := LoadBadgePageEventHandler;
   CardsFarmer.OnUpdateFarmInfo := UpdateFarmInfoEventHandler;
   CardsFarmer.OnRequired2FA := Required2FAEventHandler;
@@ -226,12 +231,12 @@ begin
 
   Rule := TSyntaxRule.Create(PARAM_LOGIN, rcRequired);
   Rule.Values.New([], 1, vtAny);
-  Rule.Description := 'Set Steam account login.';
+  Rule.Description := 'Set login.';
   Clp.SyntaxRules.Add(Rule);
 
   Rule := TSyntaxRule.Create(PARAM_PASSWORD, rcRequired);
   Rule.Values.New([], 1, vtAny);
-  Rule.Description := 'Set Steam account password.';
+  Rule.Description := 'Set password.';
   Clp.SyntaxRules.Add(Rule);
 
   Rule := TSyntaxRule.Create(PARAM_FARM_SEPARATELY, rcOptional);

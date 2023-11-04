@@ -67,6 +67,8 @@ type
     const Loaded, Total: Integer){$IFDEF OBJECT_EVENTS} of object{$ENDIF};
   TOnLogin = procedure({$IFDEF OBJECT_EVENTS}Sender: TObject; {$ENDIF}
     const Login: string){$IFDEF OBJECT_EVENTS} of object{$ENDIF};
+  TOnLogged = procedure({$IFDEF OBJECT_EVENTS}Sender: TObject; {$ENDIF}
+    const Nickname: string){$IFDEF OBJECT_EVENTS} of object{$ENDIF};
   TOnStart = procedure({$IFDEF OBJECT_EVENTS}Sender: TObject; {$ENDIF}
     const FarmMode: TFarmMode){$IFDEF OBJECT_EVENTS} of object{$ENDIF};
   TOnFinish = procedure{$IFDEF OBJECT_EVENTS}(Sender: TObject) of object{$ENDIF};
@@ -106,12 +108,21 @@ type
   EParseException = class(Exception);
 
 type
+  TSteamDataParser = record
+    function ParseGamesWithDrop(const BadgesPage: string): TGameInfoList;
+    function ParseBadgePageCount(const BadgesPage: string): Integer;
+    function ParseNickname(const MainPage: string): string;
+    function ParseProfileUrl(const MainPage: string): string;
+  end;
+
+type
   TCardsFarmer = class
   strict private
     FOnLoadBadgePage: TOnLoadBadgePage;
     FOnStart: TOnStart;
     FOnFinish: TOnFinish;
     FOnLogin: TOnLogin;
+    FOnLogged: TOnLogged;
     FOnUpdateFarmInfo: TOnUpdateFarmInfo;
     FOnRequired2FA: TOnRequired2FA;
     FStop: Boolean;
@@ -122,25 +133,25 @@ type
     FLoginData: PLoginData;
     FIsLoggedIn: Boolean;
     FProfileUrl: string;
-    procedure DoLogin(const Nickname: string);
+    FParser: TSteamDataParser;
+    procedure DoLogin(const Login: string);
+    procedure DoLogged(const Nickname: string);
     procedure DoLoadBadgePage(const Loaded, Total: Integer);
     procedure DoStart(const FarmMode: TFarmMode);
     procedure DoFinish;
     procedure DoUpdateFarmInfo(const FarmInfo: TFarmInfo);
     procedure DoRequired2FA(var Code: string);
+    procedure ConfirmationRequiredEventHandler(Sender: TObject; ConfirmationType: TSteamAuth.TConfirmationType);
     function GetGameInfoList: TGameInfoList;
     function GetPlayedLessTwoHours(const GameInfoList: TGameInfoList): TGameInfoList;
     function GetGameIdList(const GameInfoList: TGameInfoList): TStringArray;
-    function ParseGamesWithDrop(const BadgesPage: string): TGameInfoList;
-    function ParseBadgePageCount(const BadgesPage: string): Integer;
     procedure StartFarm(Mode: TFarmMode);
     function TryLogin: Boolean;
     procedure SetHttpClientHeaders;
     function HasLoginData: Boolean;
-    function ParseNickname(const Text: string): string;
-    function ParseProfileUrl(const Text: string): string;
   public
     property OnLogin: TOnLogin read FOnLogin write FOnLogin;
+    property OnLogged: TOnLogged read FOnLogged write FOnLogged;
     property OnLoadBadgePage: TOnLoadBadgePage read FOnLoadBadgePage write FOnLoadBadgePage;
     property OnStart: TOnStart read FOnStart write FOnStart;
     property OnFinish: TOnFinish read FOnFinish write FOnFinish;
@@ -335,12 +346,22 @@ end;
 
 { TCardsFarmer }
 
+procedure TCardsFarmer.ConfirmationRequiredEventHandler(Sender: TObject; ConfirmationType: TSteamAuth.TConfirmationType);
+var
+  Code2FA: string;
+begin
+  DoRequired2FA(Code2FA);
+
+  FSteamAuth.TwoFactorCode := Code2FA;
+end;
+
 constructor TCardsFarmer.Create(const AppDir: string);
 begin
   FOnStart := nil;
   FOnFinish := nil;
   FOnLoadBadgePage := nil;
   FOnLogin := nil;
+  FOnLogged := nil;
   FOnUpdateFarmInfo := nil;
   FOnRequired2FA := nil;
   FProfileUrl := '';
@@ -350,6 +371,7 @@ begin
   FIsLoggedIn := False;
 
   FSteamAuth := TSteamAuth.Create;
+  FSteamAuth.OnConfirmationRequired := ConfirmationRequiredEventHandler;
 
   FHttpClient := THTTPClient.Create;
   FHttpClient.UserAgent := USER_AGENT;
@@ -379,10 +401,16 @@ begin
     FOnLoadBadgePage({$IFDEF OBJECT_EVENTS}Self, {$ENDIF}Loaded, Total);
 end;
 
-procedure TCardsFarmer.DoLogin(const Nickname: string);
+procedure TCardsFarmer.DoLogin(const Login: string);
 begin
   if Assigned(FOnLogin) then
-    FOnLogin({$IFDEF OBJECT_EVENTS}Self, {$ENDIF}Nickname);
+    FOnLogin({$IFDEF OBJECT_EVENTS}Self, {$ENDIF}Login);
+end;
+
+procedure TCardsFarmer.DoLogged(const Nickname: string);
+begin
+  if Assigned(FOnLogged) then
+    FOnLogged({$IFDEF OBJECT_EVENTS}Self, {$ENDIF}Nickname);
 end;
 
 procedure TCardsFarmer.DoRequired2FA(var Code: string);
@@ -441,11 +469,11 @@ begin
       Body := Response.ContentAsString;
 
       if CurrentPage = 1 then
-        PageCount := ParseBadgePageCount(Body);
+        PageCount := FParser.ParseBadgePageCount(Body);
 
       DoLoadBadgePage(CurrentPage, PageCount);
       
-      Result := Result + ParseGamesWithDrop(Body);
+      Result := Result + FParser.ParseGamesWithDrop(Body);
     end;
     
   until (CurrentPage >= PageCount);
@@ -472,96 +500,7 @@ begin
   end;
 end;
 
-function TCardsFarmer.ParseGamesWithDrop(const BadgesPage: string): TGameInfoList;
 
-  function GetMatch(const Text, Pattern: string): string;
-  var
-    RegEx: TRegEx;
-    Match: TMatch;
-  begin
-    RegEx := TRegEx.Create(Pattern, [roSingleLine]);  
-    Match := RegEx.Match(Text);
-
-    if Match.Success then
-      Result := Match.Value
-    else
-      Result := '';
-  end;
-
-const 
-  START_TAG = '<div id="image_group_scroll_badge_images_gamebadge_';
-  END_TAG = '<div style="clear: both;"></div>';
-
-var
-  Info: TGameInfo;
-  Text: string;
-  s: string;
-  Offset: Integer;
-  i: Integer;
-begin
-  Result := [];
-  Offset := 1;
-  
-  repeat
-    Info := Default(TGameInfo);
-
-    Text := ExtractBetween(BadgesPage, START_TAG, END_TAG, Offset);
-    if Text = '' then
-      Break;
-
-    Offset := Pos(END_TAG, BadgesPage, Offset) + END_TAG.Length;
-
-    Info.Name := ExtractBetween(Text, '<div class="badge_title">', '&nbsp').Trim;
-
-    Info.Id := ExtractBetween(Text, '/gamecards/', '/').ToInteger;
-
-    s := ExtractBetween(Text, '<div class="card_drop_info_header">', '</div>');
-    if s <> '' then
-      Info.CardsTotal := GetMatch(s, '\d\d?').ToInteger
-    else  
-      Continue;
-    
-    s := ExtractBetween(Text, '<span class="progress_info_bold">', '</span>');
-    s := GetMatch(s, '\d\d?');
-    if s <> '' then
-      Info.CardsLeft := s.ToInteger
-    else
-      Info.CardsLeft := 0;
-
-    s := ExtractBetween(Text, '<div class="badge_title_stats_playtime">', '</div>');
-    s := GetMatch(s, '[0-9]+\.[0-9]+').Replace('.', ',');
-    if s <> '' then
-      Info.PlayTime := s.ToSingle
-    else
-      Info.PlayTime := 0;
-
-    if Info.CardsLeft > 0 then
-      Result := Result + [Info];
-
-  until Text = '';
-
-end;
-
-function TCardsFarmer.ParseBadgePageCount(const BadgesPage: string): Integer;
-var
-  s: string;
-  Offset: Integer;
-begin
-  Result := 1;
-
-  s := ExtractBetween(BadgesPage, '<div class="pageLinks">', '</div>');
-
-  if not s.IsEmpty then
-  begin
-    Offset := s.LastIndexOf('pagelink');
-
-    s := ExtractBetween(s, '">', '<', Offset);
-
-    if not TryStrToInt(s, Result) then
-      RaiseParseException('Can''t parse badge page count.');
-  end;
-
-end;
 
 function TCardsFarmer.HasLoginData: Boolean;
 begin
@@ -572,7 +511,7 @@ function TCardsFarmer.TryLogin: Boolean;
 var
   Response: IHttpResponse;
   Body: string;
-  LoginResult: TLoginResult;
+  LoginResult: TSteamAuth.TLoginResult;
   Code2FA: string;
   Nickname: string;
   s: string;
@@ -582,43 +521,35 @@ begin
 
   if not Result then
   begin
-    LoginResult := FSteamAuth.TryLogin(FLoginData.Login, FLoginData.Password);
+    DoLogin(FLoginData.Login);
 
-    if LoginResult = TLoginResult.Need2FA then
-    begin
-      DoRequired2FA(Code2FA);
-
-      FSteamAuth.TwoFactorCode := Code2FA;
-
-      LoginResult := FSteamAuth.TryLogin(FLoginData.Login, FLoginData.Password);
-    end;
+    LoginResult := FSteamAuth.Login(FLoginData.Login, FLoginData.Password);
 
     Result := FSteamAuth.LoggedIn;
 
     if Result then
-    begin
-      FLoginData.Cookie := FSteamAuth.Cookie;
-    end;
+      FLoginData.Cookie := FSteamAuth.SessionData.Cookie;
   end;
+
+  FIsLoggedIn := Result;
 
   if Result then
   begin
     for s in FLoginData.Cookie.Split(['; ']) do
     begin
-      FHttpClient.CookieManager.AddServerCookie(s, TSteamAuth.COMMUNITY_BASE);
+      FHttpClient.CookieManager.AddServerCookie(s, TSteamAPI.COMMUNITY_BASE);
     end;
 
-    Response := FHttpClient.Get(TSteamAuth.COMMUNITY_BASE);
+    Response := FHttpClient.Get(TSteamAPI.COMMUNITY_BASE);
     Body := Response.ContentAsString;
 
     if Response.StatusCode = HTTP_OK then
     begin
-      Nickname := ParseNickname(Body);
-      FProfileUrl := ParseProfileUrl(Body);
+      Nickname := FParser.ParseNickname(Body);
+      FProfileUrl := FParser.ParseProfileUrl(Body);
     end;
 
-    FIsLoggedIn := True;
-    DoLogin(Nickname);
+    DoLogged(Nickname);
   end;
 
 end;
@@ -633,24 +564,6 @@ begin
     .Add('Accept-Encoding', 'gzip, deflate, br')
     .Add('Accept-Language', 'q=0.9,en-US;q=0.8,en;q=0.7');
 
-end;
-
-function TCardsFarmer.ParseNickname(const Text: string): string;
-begin
-  Result := ExtractBetween(Text, 'data-miniprofile="', '</div>');
-  Result := ExtractBetween(Result, '">', '</a>');
-
-  if Result.IsEmpty then
-    RaiseParseException('Can''t parse nickname.');
-end;
-
-function TCardsFarmer.ParseProfileUrl(const Text: string): string;
-begin
-  Result := ExtractBetween(Text, '<div class="responsive_menu_user_area">', '</div>');
-  Result := ExtractBetween(Result, '<a href="', '">');
-
-  if Result.IsEmpty then
-    RaiseParseException('Can''t parse profile url.');
 end;
 
 procedure TCardsFarmer.Start(const FarmMode: TFarmMode; LoginData: PLoginData);
@@ -717,5 +630,118 @@ begin
   FStop := True;
   FFarmServices.Stop;
 end;
+
+{ TSteamDataParser }
+
+function TSteamDataParser.ParseGamesWithDrop(const BadgesPage: string): TGameInfoList;
+
+  function GetMatch(const Text, Pattern: string): string;
+  var
+    RegEx: TRegEx;
+    Match: TMatch;
+  begin
+    RegEx := TRegEx.Create(Pattern, [roSingleLine]);
+    Match := RegEx.Match(Text);
+
+    if Match.Success then
+      Result := Match.Value
+    else
+      Result := '';
+  end;
+
+const
+  START_TAG = '<div id="image_group_scroll_badge_images_gamebadge_';
+  END_TAG = '<div style="clear: both;"></div>';
+
+var
+  Info: TGameInfo;
+  Text: string;
+  s: string;
+  Offset: Integer;
+  i: Integer;
+begin
+  Result := [];
+  Offset := 1;
+
+  repeat
+    Info := Default(TGameInfo);
+
+    Text := ExtractBetween(BadgesPage, START_TAG, END_TAG, Offset);
+    if Text = '' then
+      Break;
+
+    Offset := Pos(END_TAG, BadgesPage, Offset) + END_TAG.Length;
+
+    Info.Name := ExtractBetween(Text, '<div class="badge_title">', '&nbsp').Trim;
+
+    Info.Id := ExtractBetween(Text, '/gamecards/', '/').ToInteger;
+
+    s := ExtractBetween(Text, '<div class="card_drop_info_header">', '</div>');
+    if s <> '' then
+      Info.CardsTotal := GetMatch(s, '\d\d?').ToInteger
+    else
+      Continue;
+
+    s := ExtractBetween(Text, '<span class="progress_info_bold">', '</span>');
+    s := GetMatch(s, '\d\d?');
+    if s <> '' then
+      Info.CardsLeft := s.ToInteger
+    else
+      Info.CardsLeft := 0;
+
+    s := ExtractBetween(Text, '<div class="badge_title_stats_playtime">', '</div>');
+    s := GetMatch(s, '[0-9]+\.[0-9]+').Replace('.', ',');
+    if s <> '' then
+      Info.PlayTime := s.ToSingle
+    else
+      Info.PlayTime := 0;
+
+    if Info.CardsLeft > 0 then
+      Result := Result + [Info];
+
+  until Text = '';
+
+end;
+
+function TSteamDataParser.ParseNickname(const MainPage: string): string;
+begin
+  Result := ExtractBetween(MainPage, 'data-miniprofile="', '</div>');
+  Result := ExtractBetween(Result, '">', '</a>');
+
+  if Result.IsEmpty then
+    RaiseParseException('Can''t parse nickname.');
+end;
+
+function TSteamDataParser.ParseProfileUrl(const MainPage: string): string;
+begin
+  Result := ExtractBetween(MainPage, '<div class="responsive_menu_user_area">', '</div>');
+  Result := ExtractBetween(Result, '<a href="', '">');
+
+  if Result.IsEmpty then
+    RaiseParseException('Can''t parse profile url.');
+end;
+
+function TSteamDataParser.ParseBadgePageCount(const BadgesPage: string): Integer;
+var
+  s: string;
+  Offset: Integer;
+begin
+  Result := 1;
+
+  s := ExtractBetween(BadgesPage, '<div class="pageLinks">', '</div>');
+
+  if not s.IsEmpty then
+  begin
+    Offset := s.LastIndexOf('pagelink');
+
+    s := ExtractBetween(s, '">', '<', Offset);
+
+    if not TryStrToInt(s, Result) then
+      RaiseParseException('Can''t parse badge page count.');
+  end;
+
+end;
+
+
 
 end.
