@@ -12,103 +12,133 @@ interface
 {$SCOPEDENUMS ON}
 
 uses
-  Winapi.Windows, System.SysUtils, System.Classes, System.IOUtils,
-  System.Net.HttpClient, System.JSON, System.NetEncoding, REST.Json.Types, REST.Json,
-  uRSA;
+  Winapi.Windows, System.SysUtils, System.Classes, System.IOUtils, System.NetEncoding,
+  System.Net.HttpClient, System.JSON, REST.Json.Types, REST.Json, uRSA;
 
 type
-  TLoginResult =
-    (GeneralFailure, LoginOkay, BadRSA, BadCredentials, NeedCaptcha, Need2FA, NeedEmail, TooManyFailedLogins);
-
-type
-  TRSAResponse = class
-    [JSONName('success')]
-    Success: Boolean;
+  TRSAResponseValue = class
+  public
     [JSONName('publickey_exp')]
     Exponent: string;
     [JSONName('publickey_mod')]
     Modulus: string;
     [JSONName('timestamp')]
     Timestamp: string;
+  end;
+
+type
+  TRSAResponse = class
+  public
+    [JSONName('response')]
+    Value: TRSAResponseValue;
+  end;
+
+type
+  TBeginAuthSessionResponseValue = class
+  public
+    [JSONName('client_id')]
+    ClientId: string;
+    [JSONName('request_id')]
+    RequestId: string;
+    [JSONName('interval')]
+    Interval: Integer;
+
     [JSONName('steamid')]
-    SteamID: Int64;
+    SteamId: string;
+    [JSONName('weak_token')]
+    WeakToken: string;
+    [JSONName('extended_error_message')]
+    ExtendedErrorMessage: string;
   end;
 
 type
-  TSessionData = record
-    SessionID: string;
-    SteamLogin: string;
-    SteamLoginSecure: string;
-    WebCookie: string;
-    SteamID: Int64;
+  TBeginAuthSessionResponse = class
+  public
+    [JSONName('response')]
+    Value: TBeginAuthSessionResponseValue;
   end;
 
 type
-  TTransferParameters = class
-    [JSONName('steamid')]
-    SteamID: UInt64;
-    [JSONName('token_secure')]
-    TokenSecure: string;
-    [JSONName('auth')]
-    Auth: string;
-    [JSONName('webcookie')]
-    WebCookie: string;
+  TPollAuthSessionResponseValue = class
+  public
+    [JSONName('refresh_token')]
+    RefreshToken: string;
+    [JSONName('access_token')]
+    AccessToken: string;
+    [JSONName('had_remote_interaction')]
+    HadRemoteInteraction: Boolean;
+    [JSONName('account_name')]
+    AccountName: string;
   end;
 
 type
-  TLoginResponse = class
-    [JSONName('success')]
-    Success: Boolean;
-    [JSONName('login_complete')]
-    LoginComplete: Boolean;
-    [JSONName('transfer_parameters')]
-    TransferParameters: TTransferParameters;
-    [JSONName('captcha_needed')]
-    CaptchaNeeded: Boolean;
-    [JSONName('captcha_gid')]
-    CaptchaGID: string;
-    [JSONName('emailsteamid')]
-    EmailSteamID: string;
-    [JSONName('emailauth_needed')]
-    EmailAuthNeeded: Boolean;
-    [JSONName('requires_twofactor')]
-    TwoFactorNeeded: Boolean;
-    [JSONName('message')]
-    Message: string;
+  TPollAuthSessionResponse = class
+  public
+    [JSONName('response')]
+    Value: TPollAuthSessionResponseValue;
+  end;
+
+type
+  TSteamAPI = class
+  public
+    const STEAMAPI_BASE = 'https://api.steampowered.com';
+    const COMMUNITY_BASE = 'https://steamcommunity.com';
+    const LOGIN_STEAMPOWERED_BASE = 'https://login.steampowered.com';
+    const GET_PASSWORD_RSA_PUBLIC_KEY = STEAMAPI_BASE + '/IAuthenticationService/GetPasswordRSAPublicKey/v1/';
+    const BEGIN_AUTH_SESSION_VIA_CRIDENTIALS = STEAMAPI_BASE + '/IAuthenticationService/BeginAuthSessionViaCredentials/v1/';
+    const UPDATE_AUTH_SESSION_WITH_STEAM_GUARD_CODE = STEAMAPI_BASE + '/IAuthenticationService/UpdateAuthSessionWithSteamGuardCode/v1/';
+    const POLL_AUTH_SESSION_STATUS = STEAMAPI_BASE + '/IAuthenticationService/PollAuthSessionStatus/v1/';
+    const FINALIZE_LOGIN = LOGIN_STEAMPOWERED_BASE + '/jwt/finalizelogin';
+    const SET_TOKEN = COMMUNITY_BASE + '/login/settoken';
   end;
 
 type
   TSteamAuth = class
+  public
+  type
+    TLoginResult = (GeneralFailure, LoginOkay, BadRSA, BadCredentials, NeedCaptcha, Need2FA,
+      NeedEmail, TooManyFailedLogins);
+    TConfirmationType = (Unknown = 0, None = 1, EmailCode = 2, TwoFactorCode = 3, DeviceConfirmation = 4,
+      EmailConfirmation = 5, MachineToken = 6, LegacyMachineAuth = 7);
+
+  type
+    TSessionData = record
+      SessionID: string;
+      SteamLogin: string;
+      SteamLoginSecure: string;
+      SteamID: Int64;
+      Cookie: string;
+    end;
+
+  type
+    TOnConfirmationRequiredEvent = procedure(Sender: TObject; ConfirmationType: TConfirmationType) of object;
+
   private
-    FCookie: string;
-    FTwoFactorCode: string;
+    FOnConfirmationRequiredEvent: TOnConfirmationRequiredEvent;
     FCaptchaGID: string;
-    FSteamID: string;
-    FEmailCode: string;
     FCaptchaText: string;
     FHttpClient: THTTPClient;
-    FList: TStringList;
     FSessionData: TSessionData;
     FLoginResult: TLoginResult;
+    FTwoFactorCode: string;
     procedure Clear;
     procedure SetHeaders;
+    function GetCookieValue(const Url, Name: string): string;
+    procedure DoConfirmationRequired(ConfirmationType: TConfirmationType);
   public
     const
       HTTP_OK = 200;
       HTTP_TOO_MANY_REQUESTS = 429;
-      STEAMAPI_BASE = 'https://api.steampowered.com';
-      COMMUNITY_BASE = 'https://steamcommunity.com';
       USER_AGENT =
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/111.0.0.0 Safari/537.36';
   public
-    property Cookie: string read FCookie;
+    property OnConfirmationRequired: TOnConfirmationRequiredEvent read FOnConfirmationRequiredEvent write FOnConfirmationRequiredEvent;
     property SessionData: TSessionData read FSessionData;
     property TwoFactorCode: string read FTwoFactorCode write FTwoFactorCode;
-    property EmailCode: string read FEmailCode write FEmailCode;
     property CaptchaText: string read FCaptchaText write FCaptchaText;
     constructor Create;
     destructor Destroy; override;
-    function TryLogin(const Login, Password: string): TLoginResult;
+    function Login(const Login, Password: string): TLoginResult;
     function LoggedIn: Boolean;
     function Requires2FA: Boolean;
     function RequiresEmailAuth: Boolean;
@@ -118,39 +148,23 @@ type
 
 implementation
 
-function ExtractBetween(const Text, TagFirst, TagLast: string; Offset: Integer = 1): string;
-var
-  TFPos, TLPos: Integer;
-begin
-  Result := '';
-  TFPos := Pos(TagFirst, Text, Offset);
-  TLPos := Pos(TagLast, Text, TFPos + Length(TagFirst));
-
-  if (TLPos <> 0) and (TFPos <> 0) then
-    Result := Copy(Text, TFPos + Length(TagFirst), TLPos - TFPos - Length(TagFirst));
-end;
-
 { TSteamAuth }
 
 procedure TSteamAuth.Clear;
 begin
   FCaptchaGID := '';
-  FSteamID := '';
-  FCookie := '';
 
   FSessionData := Default(TSessionData);
   FLoginResult := TLoginResult.GeneralFailure;
-  FList.Clear;
 end;
 
 constructor TSteamAuth.Create;
 begin
+  FOnConfirmationRequiredEvent := nil;
   FHttpClient := THTTPClient.Create;
   SetHeaders;
-  FList := TStringList.Create;
 
   FTwoFactorCode := '';
-  FEmailCode := '';
   FCaptchaText := '';
 
   Clear;
@@ -159,9 +173,38 @@ end;
 
 destructor TSteamAuth.Destroy;
 begin
-  FList.Free;
   FHttpClient.Free;
   inherited;
+end;
+
+procedure TSteamAuth.DoConfirmationRequired(ConfirmationType: TConfirmationType);
+begin
+  if Assigned(FOnConfirmationRequiredEvent) then
+    FOnConfirmationRequiredEvent(Self, ConfirmationType);
+end;
+
+function TSteamAuth.GetCookieValue(const Url, Name: string): string;
+var
+  Cookie: TCookie;
+  Domain: string;
+  Spl: TArray<string>;
+begin
+  Result := '';
+  Spl := Url.Split(['//']);
+
+  if Length(Spl) <> 2 then
+    raise Exception.Create('Invalid url.');
+
+  Domain := '.' + Spl[1];
+
+  for Cookie in FHttpClient.CookieManager.Cookies do
+  begin
+    if (Cookie.Domain = Domain) and (Cookie.Name = Name) then
+    begin
+      Result := Cookie.Value;
+      Break;
+    end;
+  end;
 end;
 
 function TSteamAuth.IsValidCookie(const Value: string): Boolean;
@@ -181,10 +224,10 @@ begin
 
   for s in Value.Split(['; ']) do
   begin
-    FHttpClient.CookieManager.AddServerCookie(s, COMMUNITY_BASE);
+    FHttpClient.CookieManager.AddServerCookie(s, TSteamAPI.COMMUNITY_BASE);
   end;
 
-  Response := FHttpClient.Get(COMMUNITY_BASE);
+  Response := FHttpClient.Get(TSteamAPI.COMMUNITY_BASE);
   Body := Response.ContentAsString;
 
   if Response.StatusCode = HTTP_OK then
@@ -226,143 +269,165 @@ begin
   FHttpClient.CookieManager.Clear;
 end;
 
-function TSteamAuth.TryLogin(const Login, Password: string): TLoginResult;
+function TSteamAuth.Login(const Login, Password: string): TLoginResult;
 var
   Response: IHttpResponse;
-  Body: string;
   RSAResponse: TRSAResponse;
-  LoginResponse: TLoginResponse;
+  BeginAuthSessionResponse: TBeginAuthSessionResponse;
+  PollAuthSessionResponse: TPollAuthSessionResponse;
   EncryptedPasswordBytes: TBytes;
   EncryptedPassword: string;
+  JsonValue: TJSONValue;
   C: TCookie;
+  TokenNonce: string;
+  TokenAuth: string;
+  Body: string;
+  List: TStringList;
+  ConfirmationId: Integer;
+  ConfirmationType: TConfirmationType;
 begin
   RSAResponse := nil;
-  LoginResponse := nil;
+  BeginAuthSessionResponse := nil;
+  PollAuthSessionResponse := nil;
+  ConfirmationId := 0;
+
+  List := TStringList.Create;
 
   Clear;
   SetHeaders;
 
-  FList.Add('username=' + Login);
-
-  Response := FHttpClient.Post(COMMUNITY_BASE + '/login/getrsakey', FList);
-  Body := Response.ContentAsString;
-
   try
-    if Response.StatusCode <> HTTP_OK then
-      Exit(TLoginResult.GeneralFailure);
-
-    if Body.Contains('<BODY>\nAn error occurred while processing your request.') then
-      Exit(TLoginResult.GeneralFailure);
+    Response := FHttpClient.Get(TSteamAPI.GET_PASSWORD_RSA_PUBLIC_KEY +
+      '?account_name=' + Login);
 
     try
-      RSAResponse := TJSON.JsonToObject<TRSAResponse>(Body);
+      RSAResponse := TJSON.JsonToObject<TRSAResponse>(Response.ContentAsString);
     except
       Exit(TLoginResult.GeneralFailure);
     end;
 
-    if not Assigned(RSAResponse) then
+    EncryptedPasswordBytes := TRsa.Encrypt(Password, RSAResponse.Value.Modulus, RSAResponse.Value.Exponent);
+    EncryptedPassword := TNetEncoding.Base64.EncodeBytesToString(EncryptedPasswordBytes);
+    EncryptedPassword := EncryptedPassword.Replace(sLineBreak, '', [rfReplaceAll]);
+
+    Sleep(300);
+
+    { Send encrypted data }
+    List.Clear;
+    List.Add('persistence=1');
+    List.Add('encrypted_password=' + EncryptedPassword);
+    List.Add('account_name=' + Login);
+    List.Add('encryption_timestamp=' + RSAResponse.Value.Timestamp);
+
+    Response := FHttpClient.Post(TSteamAPI.BEGIN_AUTH_SESSION_VIA_CRIDENTIALS, List);
+    Body := Response.ContentAsString;
+
+    try
+      BeginAuthSessionResponse := TJSON.JsonToObject<TBeginAuthSessionResponse>(Body);
+    except
       Exit(TLoginResult.GeneralFailure);
-
-    if not RSAResponse.Success then
-    begin
-      Exit(TLoginResult.BadRSA);
-    end
-      else
-    begin
-      EncryptedPasswordBytes := TRsa.Encrypt(Password, RSAResponse.Modulus, RSAResponse.Exponent);
-      EncryptedPassword := TNetEncoding.Base64.EncodeBytesToString(EncryptedPasswordBytes);
-      EncryptedPassword := EncryptedPassword.Replace(sLineBreak, '', [rfReplaceAll]);
-
-      Sleep(300);
-
-      { Send encrypted data }
-      FList.Clear;
-      FList.Add('password=' + EncryptedPassword);
-      FList.Add('username=' + Login);
-      FList.Add('twofactorcode=' + FTwoFactorCode);
-
-      FList.Add('emailauth=' + FEmailCode);
-      FList.Add('captchagid=' + FCaptchaGID);
-      FList.Add('captcha_text=' + FCaptchaText);
-      FList.Add('emailsteamid=' + FSteamID);
-
-      FList.Add('rsatimestamp=' + RSAResponse.Timestamp);
-      FList.Add('remember_login=true');
-
-      Response := FHttpClient.Post(COMMUNITY_BASE + '/login/dologin', FList);
-      Body := Response.ContentAsString;
-
-      if (Response.StatusCode <> HTTP_OK) or Body.IsEmpty then
-        Exit(TLoginResult.GeneralFailure);
-
-      try
-        LoginResponse := TJSON.JsonToObject<TLoginResponse>(Body);
-      except
-        Exit(TLoginResult.GeneralFailure);
-      end;
-
-      if not Assigned(LoginResponse) then
-        Exit(TLoginResult.GeneralFailure);
-
-      if not LoginResponse.Message.IsEmpty then
-      begin
-        if LoginResponse.Message.Contains('There have been too many login failures') then
-          Exit(TLoginResult.TooManyFailedLogins);
-
-        if LoginResponse.Message.Contains('Incorrect login') then
-          Exit(TLoginResult.BadCredentials);
-      end;
-
-      if LoginResponse.CaptchaNeeded then
-      begin
-        FCaptchaGID := LoginResponse.CaptchaGID;
-        Exit(TLoginResult.NeedCaptcha);
-      end;
-
-      if LoginResponse.EmailAuthNeeded then
-      begin
-        FSteamID := LoginResponse.EmailSteamID;
-        Exit(TLoginResult.NeedEmail);
-      end;
-
-      if LoginResponse.TwoFactorNeeded and not LoginResponse.Success then
-      begin
-        Exit(TLoginResult.Need2FA);
-      end;
-
-      if not LoginResponse.LoginComplete then
-      begin
-        Exit(TLoginResult.BadCredentials);
-      end;
-
-      FSessionData.SteamID := LoginResponse.TransferParameters.SteamID;
-      FSessionData.SteamLoginSecure := LoginResponse.TransferParameters.SteamID.ToString + '%7C%7C' +
-        LoginResponse.TransferParameters.TokenSecure;
-      FSessionData.SteamLogin := Login;
-      FSessionData.WebCookie := LoginResponse.TransferParameters.WebCookie;
-      FSessionData.SessionID := '';
-
-      Result := TLoginResult.LoginOkay;
     end;
+
+    if BeginAuthSessionResponse.Value.SteamId.IsEmpty then
+      Exit(TLoginResult.BadCredentials);
+
+    JsonValue := TJSONObject.ParseJSONValue(Body);
+    try
+      try
+        JSONValue.TryGetValue<Integer>('response.allowed_confirmations[0].confirmation_type', ConfirmationId);
+      finally
+        JsonValue.Free;
+      end;
+
+    except
+      Exit(TLoginResult.GeneralFailure);
+    end;
+
+    if ConfirmationId > 0 then
+    begin
+      DoConfirmationRequired(TConfirmationType(ConfirmationId));
+    end;
+
+    { Update authentication session }
+    List.Clear;
+    List.Add('client_id=' + BeginAuthSessionResponse.Value.ClientId);
+    List.Add('steamid=' + BeginAuthSessionResponse.Value.SteamId);
+    List.Add('code=' + FTwoFactorCode);
+    List.Add('code_type=' + ConfirmationId.ToString);
+
+    Response := FHttpClient.Post(TSteamAPI.UPDATE_AUTH_SESSION_WITH_STEAM_GUARD_CODE, List);
+
+    { Poll during authentication process }
+    List.Clear;
+    List.Add('client_id=' + BeginAuthSessionResponse.Value.ClientId);
+    List.Add('request_id=' + BeginAuthSessionResponse.Value.RequestId);
+
+    Response := FHttpClient.Post(TSteamAPI.POLL_AUTH_SESSION_STATUS, List);
+
+    try
+      PollAuthSessionResponse := TJSON.JsonToObject<TPollAuthSessionResponse>(Response.ContentAsString);
+    except
+      Exit(TLoginResult.GeneralFailure);
+    end;
+
+    { Finalize login }
+    FSessionData.SessionID := GetCookieValue(TSteamAPI.COMMUNITY_BASE, 'sessionid');
+    FSessionData.SteamLogin := PollAuthSessionResponse.Value.AccountName;
+
+    List.Clear;
+    List.Add('nonce=' + PollAuthSessionResponse.Value.RefreshToken);
+    List.Add('sessionid=' + FSessionData.SessionID);
+
+    Response := FHttpClient.Post(TSteamAPI.FINALIZE_LOGIN, List);
+
+    JsonValue := TJSONObject.ParseJSONValue(Response.ContentAsString);
+    try
+      TokenNonce := JSONValue.GetValue<string>('transfer_info[1].params.nonce');
+      TokenAuth := JSONValue.GetValue<string>('transfer_info[1].params.auth');
+    finally
+      JsonValue.Free;
+    end;
+
+    { Set token }
+    List.Clear;
+    List.Add('nonce=' + TokenNonce);
+    List.Add('auth=' + TokenAuth);
+    List.Add('steamID=' + BeginAuthSessionResponse.Value.SteamId);
+
+    Response := FHttpClient.Post(TSteamAPI.SET_TOKEN, List);
+
+    Result := TLoginResult.LoginOkay;
 
   finally
     FLoginResult := Result;
+
+    if Result = TLoginResult.LoginOkay then
+    begin
+      FSessionData.SteamID := BeginAuthSessionResponse.Value.SteamId.ToInt64;
+      FSessionData.SteamLoginSecure := GetCookieValue(TSteamAPI.COMMUNITY_BASE, 'steamLoginSecure');
+
+      for C in FHttpClient.CookieManager.Cookies do
+        FSessionData.Cookie := FSessionData.Cookie + C.ToString + '; ';
+    end;
+
+    if Assigned(RSAResponse) then
+      if Assigned(RSAResponse.Value) then
+        RSAResponse.Value.Free;
     RSAResponse.Free;
 
-    if Assigned(LoginResponse) then
-      if Assigned(LoginResponse.TransferParameters) then
-        FreeAndNil(LoginResponse.TransferParameters);
-    LoginResponse.Free;
-  end;
+    if Assigned(BeginAuthSessionResponse) then
+      if Assigned(BeginAuthSessionResponse.Value) then
+        BeginAuthSessionResponse.Value.Free;
+    BeginAuthSessionResponse.Free;
 
-  if Result = TLoginResult.LoginOkay then
-  begin
-    for C in FHttpClient.CookieManager.Cookies do
-      FCookie := FCookie + C.ToString + '; ';
+    if Assigned(PollAuthSessionResponse) then
+      if Assigned(PollAuthSessionResponse.Value) then
+        PollAuthSessionResponse.Value.Free;
+    PollAuthSessionResponse.Free;
+
+    List.Free;
   end;
 
 end;
-
-
 
 end.

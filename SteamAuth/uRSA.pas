@@ -100,7 +100,7 @@ var
 
   function GetErrorMessage: string;
   begin
-    Result := BCRYPT_LIB + ' error, status: ' + IntToStr(status) + '. ' + SysErrorMessage(GetLastError());
+    Result := BCRYPT_LIB + ' error, status: ' + IntToStr(status) + '. message: ' + SysErrorMessage(GetLastError());
   end;
 
 begin
@@ -112,6 +112,7 @@ begin
   InputData := TEncoding.ASCII.GetBytes(Data);
 
   { Create a key }
+  PublicKeyBLOB := Default(TPublicKeyBLOB);
   with PublicKeyBLOB do
   begin
     Magic := BCRYPT_RSAPUBLIC_MAGIC;
